@@ -1,13 +1,30 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Plus, Moon, Sun, ChevronLeft, ChevronRight, Trash2, Palette, LayoutGrid } from "lucide-react";
+import {
+  Plus,
+  Moon,
+  Sun,
+  ChevronLeft,
+  ChevronRight,
+  Trash2,
+  Palette,
+  LayoutGrid,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-const StorageKey = "MinimalHabitCalendar_v2";
+import { initializeApp } from "firebase/app";
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, getAuth } from "firebase/auth";
+import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from "firebase/firestore";
 
 const PresetColors = [
   { name: "Rose", value: "#D8A7B1" },
@@ -36,6 +53,29 @@ const MonthNames = [
 ];
 
 const Weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ?? "",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ?? "",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ?? "",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID ?? "",
+};
+
+const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
+
+let firebaseAuth = null;
+let firestoreDb = null;
+let googleProvider = null;
+
+if (hasFirebaseConfig) {
+  const app = initializeApp(firebaseConfig);
+  firebaseAuth = getAuth(app);
+  firestoreDb = getFirestore(app);
+  googleProvider = new GoogleAuthProvider();
+  googleProvider.setCustomParameters({ prompt: "select_account" });
+}
 
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
@@ -75,23 +115,6 @@ function buildMonthCells(year, monthIndex) {
   return cells;
 }
 
-function loadState() {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const raw = window.localStorage.getItem(StorageKey);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function saveState(state) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(StorageKey, JSON.stringify(state));
-}
-
 function themeSurface(isDark) {
   return isDark ? "#171717" : "#F5F1EB";
 }
@@ -128,6 +151,14 @@ function createEmptyWorkspace(name) {
   };
 }
 
+function createDefaultAppState() {
+  return {
+    isDark: false,
+    workspaces: [createEmptyWorkspace("Main workspace")],
+    selectedWorkspaceIndex: 0,
+  };
+}
+
 function normalizeWorkspace(workspace, fallbackName) {
   if (!workspace || typeof workspace !== "object") {
     return createEmptyWorkspace(fallbackName);
@@ -135,27 +166,52 @@ function normalizeWorkspace(workspace, fallbackName) {
 
   return {
     id: typeof workspace.id === "string" ? workspace.id : crypto.randomUUID(),
-    name: typeof workspace.name === "string" && workspace.name.trim() ? workspace.name : fallbackName,
+    name:
+      typeof workspace.name === "string" && workspace.name.trim()
+        ? workspace.name
+        : fallbackName,
     habits: Array.isArray(workspace.habits) ? workspace.habits : [],
-    days: typeof workspace.days === "object" && workspace.days !== null ? workspace.days : {},
+    days:
+      typeof workspace.days === "object" && workspace.days !== null ? workspace.days : {},
     selectedHabitId: workspace.selectedHabitId ?? null,
-    selectedYear: Number.isInteger(workspace.selectedYear) ? workspace.selectedYear : new Date().getFullYear(),
-    selectedMonth: Number.isInteger(workspace.selectedMonth) ? workspace.selectedMonth : new Date().getMonth(),
+    selectedYear: Number.isInteger(workspace.selectedYear)
+      ? workspace.selectedYear
+      : new Date().getFullYear(),
+    selectedMonth: Number.isInteger(workspace.selectedMonth)
+      ? workspace.selectedMonth
+      : new Date().getMonth(),
+  };
+}
+
+function normalizeAppState(data) {
+  const fallback = createDefaultAppState();
+
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  const rawWorkspaces = Array.isArray(data.workspaces) && data.workspaces.length > 0 ? data.workspaces : fallback.workspaces;
+  const workspaces = rawWorkspaces.map((workspace, index) =>
+    normalizeWorkspace(workspace, `Workspace ${index + 1}`)
+  );
+
+  return {
+    isDark: typeof data.isDark === "boolean" ? data.isDark : fallback.isDark,
+    workspaces,
+    selectedWorkspaceIndex: clamp(
+      Number.isInteger(data.selectedWorkspaceIndex) ? data.selectedWorkspaceIndex : 0,
+      0,
+      workspaces.length - 1
+    ),
   };
 }
 
 export default function HabitCalendarSite() {
-  const saved = loadState();
-  const now = new Date();
-
-  const initialWorkspaces = Array.isArray(saved?.workspaces) && saved.workspaces.length > 0
-    ? saved.workspaces.map((workspace, index) => normalizeWorkspace(workspace, `Workspace ${index + 1}`))
-    : [createEmptyWorkspace("Main workspace")];
-
-  const [isDark, setIsDark] = useState(saved?.isDark ?? false);
-  const [workspaces, setWorkspaces] = useState(initialWorkspaces);
+  const defaultState = useMemo(() => createDefaultAppState(), []);
+  const [isDark, setIsDark] = useState(defaultState.isDark);
+  const [workspaces, setWorkspaces] = useState(defaultState.workspaces);
   const [selectedWorkspaceIndex, setSelectedWorkspaceIndex] = useState(
-    clamp(saved?.selectedWorkspaceIndex ?? 0, 0, initialWorkspaces.length - 1)
+    defaultState.selectedWorkspaceIndex
   );
   const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
@@ -165,6 +221,11 @@ export default function HabitCalendarSite() {
   const [customRed, setCustomRed] = useState("216");
   const [customGreen, setCustomGreen] = useState("167");
   const [customBlue, setCustomBlue] = useState("177");
+  const [user, setUser] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isRemoteReady, setIsRemoteReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [authError, setAuthError] = useState("");
 
   const activeWorkspace = workspaces[selectedWorkspaceIndex] ?? workspaces[0];
 
@@ -174,12 +235,69 @@ export default function HabitCalendarSite() {
   );
 
   useEffect(() => {
-    saveState({
-      isDark,
-      workspaces,
-      selectedWorkspaceIndex,
+    if (!firebaseAuth || !firestoreDb) {
+      setIsAuthReady(true);
+      setAuthError(
+        "Firebase is not configured yet. Add the VITE_FIREBASE_* env variables first."
+      );
+      return undefined;
+    }
+
+    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
+      setUser(nextUser);
+      setIsAuthReady(true);
+      setIsRemoteReady(false);
+      setAuthError("");
+
+      if (!nextUser) {
+        setIsRemoteReady(true);
+        return;
+      }
+
+      try {
+        const snapshot = await getDoc(doc(firestoreDb, "users", nextUser.uid));
+        if (snapshot.exists()) {
+          const normalized = normalizeAppState(snapshot.data());
+          setIsDark(normalized.isDark);
+          setWorkspaces(normalized.workspaces);
+          setSelectedWorkspaceIndex(normalized.selectedWorkspaceIndex);
+        } else {
+          const fallback = createDefaultAppState();
+          setIsDark(fallback.isDark);
+          setWorkspaces(fallback.workspaces);
+          setSelectedWorkspaceIndex(fallback.selectedWorkspaceIndex);
+        }
+      } catch (error) {
+        setAuthError(error?.message || "Failed to load your Firebase data.");
+      } finally {
+        setIsRemoteReady(true);
+      }
     });
-  }, [isDark, workspaces, selectedWorkspaceIndex]);
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !firestoreDb || !isRemoteReady) return undefined;
+
+    const timeoutId = window.setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        await setDoc(doc(firestoreDb, "users", user.uid), {
+          isDark,
+          workspaces,
+          selectedWorkspaceIndex,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        setAuthError(error?.message || "Failed to save your data.");
+      } finally {
+        setIsSaving(false);
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [user, firestoreDb, isRemoteReady, isDark, workspaces, selectedWorkspaceIndex]);
 
   const habitMap = useMemo(() => {
     const map = new Map();
@@ -204,6 +322,26 @@ export default function HabitCalendarSite() {
         return normalizeWorkspace(updatedWorkspace, workspace.name);
       })
     );
+  }
+
+  async function handleGoogleSignIn() {
+    if (!firebaseAuth || !googleProvider) return;
+    setAuthError("");
+    try {
+      await signInWithPopup(firebaseAuth, googleProvider);
+    } catch (error) {
+      setAuthError(error?.message || "Google sign-in failed.");
+    }
+  }
+
+  async function handleSignOut() {
+    if (!firebaseAuth) return;
+    setAuthError("");
+    try {
+      await signOut(firebaseAuth);
+    } catch (error) {
+      setAuthError(error?.message || "Sign out failed.");
+    }
   }
 
   function addHabit() {
@@ -255,7 +393,8 @@ export default function HabitCalendarSite() {
         ...workspace,
         habits: nextHabits,
         days: nextDays,
-        selectedHabitId: workspace.selectedHabitId === habitId ? null : workspace.selectedHabitId,
+        selectedHabitId:
+          workspace.selectedHabitId === habitId ? null : workspace.selectedHabitId,
       };
     });
   }
@@ -382,34 +521,99 @@ export default function HabitCalendarSite() {
   }
 
   function goPreviousWorkspace() {
-    setSelectedWorkspaceIndex((current) => (current === 0 ? workspaces.length - 1 : current - 1));
+    setSelectedWorkspaceIndex((current) =>
+      current === 0 ? workspaces.length - 1 : current - 1
+    );
   }
 
   function goNextWorkspace() {
-    setSelectedWorkspaceIndex((current) => (current === workspaces.length - 1 ? 0 : current + 1));
+    setSelectedWorkspaceIndex((current) =>
+      current === workspaces.length - 1 ? 0 : current + 1
+    );
   }
 
   const habitPreviewColor = isHexColor(habitColor)
     ? habitColor
     : `rgb(${clamp(Number(customRed || 0), 0, 255)}, ${clamp(Number(customGreen || 0), 0, 255)}, ${clamp(Number(customBlue || 0), 0, 255)})`;
 
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen w-full" style={{ background: appBackground, color: textColor }}>
+        <div className="mx-auto flex min-h-screen max-w-7xl items-center justify-center p-4">
+          <Card style={{ background: panelBackground, borderColor }} className="rounded-3xl border shadow-sm">
+            <CardContent className="p-6 text-sm" style={{ color: mutedColor }}>
+              Preparing Firebase session...
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen w-full" style={{ background: appBackground, color: textColor }}>
+        <div className="mx-auto flex min-h-screen max-w-7xl items-center justify-center p-4">
+          <Card style={{ background: panelBackground, borderColor }} className="w-full max-w-lg rounded-3xl border shadow-sm">
+            <CardContent className="flex flex-col gap-4 p-6 md:p-8">
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border" style={{ borderColor, background: surfaceColor }}>
+                  <Palette size={18} />
+                </div>
+                <div>
+                  <h1 className="text-xl font-semibold">Minimal habit calendar</h1>
+                  <p className="text-sm" style={{ color: mutedColor }}>
+                    Sign in with Google to sync your workspaces across devices.
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border p-4 text-sm" style={{ borderColor, background: surfaceColor, color: mutedColor }}>
+                Your calendar data will be stored in Firestore under your account. Another person only gets access if they sign in to the same Google account.
+              </div>
+
+              {authError ? (
+                <div className="rounded-2xl border p-4 text-sm" style={{ borderColor, background: surfaceColor, color: textColor }}>
+                  {authError}
+                </div>
+              ) : null}
+
+              <Button onClick={handleGoogleSignIn} className="rounded-2xl shadow-sm">
+                Continue with Google
+              </Button>
+
+              <p className="text-xs" style={{ color: mutedColor }}>
+                Firebase Auth handles sign-in; Firestore stores the actual workspace data. Access is then controlled by security rules on the backend.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isRemoteReady) {
+    return (
+      <div className="min-h-screen w-full" style={{ background: appBackground, color: textColor }}>
+        <div className="mx-auto flex min-h-screen max-w-7xl items-center justify-center p-4">
+          <Card style={{ background: panelBackground, borderColor }} className="rounded-3xl border shadow-sm">
+            <CardContent className="p-6 text-sm" style={{ color: mutedColor }}>
+              Loading your cloud data...
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{ background: appBackground, color: textColor }}
-      className="min-h-screen w-full p-4 md:p-6"
-    >
+    <div style={{ background: appBackground, color: textColor }} className="min-h-screen w-full p-4 md:p-6">
       <div className="mx-auto flex max-w-7xl flex-col gap-4">
-        <Card
-          style={{ background: panelBackground, borderColor }}
-          className="rounded-3xl border shadow-sm"
-        >
+        <Card style={{ background: panelBackground, borderColor }} className="rounded-3xl border shadow-sm">
           <CardContent className="flex flex-col gap-4 p-4 md:p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-center gap-3">
-                <div
-                  className="flex h-11 w-11 items-center justify-center rounded-2xl border"
-                  style={{ borderColor, background: surfaceColor }}
-                >
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border" style={{ borderColor, background: surfaceColor }}>
                   <Palette size={18} />
                 </div>
                 <div>
@@ -431,10 +635,7 @@ export default function HabitCalendarSite() {
                   <ChevronLeft size={16} />
                 </Button>
 
-                <div
-                  className="min-w-[180px] rounded-2xl border px-4 py-2 text-center text-sm font-medium"
-                  style={{ borderColor, background: surfaceColor }}
-                >
+                <div className="min-w-[180px] rounded-2xl border px-4 py-2 text-center text-sm font-medium" style={{ borderColor, background: surfaceColor }}>
                   <div className="flex items-center justify-center gap-2">
                     <LayoutGrid size={14} />
                     <span>{workspaceLabel}</span>
@@ -458,10 +659,7 @@ export default function HabitCalendarSite() {
                       New workspace
                     </Button>
                   </DialogTrigger>
-                  <DialogContent
-                    className="rounded-3xl border shadow-2xl sm:max-w-md"
-                    style={{ background: panelBackground, color: textColor, borderColor }}
-                  >
+                  <DialogContent className="rounded-3xl border shadow-2xl sm:max-w-md" style={{ background: panelBackground, color: textColor, borderColor }}>
                     <DialogHeader>
                       <DialogTitle style={{ color: textColor }}>Create new workspace</DialogTitle>
                     </DialogHeader>
@@ -504,21 +702,32 @@ export default function HabitCalendarSite() {
                 >
                   {isDark ? <Sun size={16} /> : <Moon size={16} />}
                 </Button>
+
+                <Button
+                  variant="outline"
+                  onClick={handleSignOut}
+                  className="rounded-2xl border"
+                  style={{ borderColor, background: panelBackground, color: textColor }}
+                >
+                  Sign out
+                </Button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-xs" style={{ color: mutedColor }}>
+            <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: mutedColor }}>
               <span>Workspace {selectedWorkspaceIndex + 1} of {workspaces.length}.</span>
               <span>Use arrows to switch workspaces.</span>
-              <span>Each workspace keeps its own month, habits, and days.</span>
+              <span>{isSaving ? "Saving to Firebase..." : "Synced with Firebase."}</span>
             </div>
+            {authError ? (
+              <div className="rounded-2xl border px-3 py-2 text-xs" style={{ borderColor, color: textColor, background: surfaceColor }}>
+                {authError}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 
-        <Card
-          style={{ background: panelBackground, borderColor }}
-          className="rounded-3xl border shadow-sm"
-        >
+        <Card style={{ background: panelBackground, borderColor }} className="rounded-3xl border shadow-sm">
           <CardContent className="flex flex-col gap-4 p-4 md:p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex items-center gap-2 text-sm font-medium" style={{ color: textColor }}>
@@ -549,14 +758,7 @@ export default function HabitCalendarSite() {
                     </Button>
                   </DialogTrigger>
 
-                  <DialogContent
-                    className="rounded-3xl border shadow-2xl sm:max-w-md"
-                    style={{
-                      background: panelBackground,
-                      color: textColor,
-                      borderColor,
-                    }}
-                  >
+                  <DialogContent className="rounded-3xl border shadow-2xl sm:max-w-md" style={{ background: panelBackground, color: textColor, borderColor }}>
                     <DialogHeader>
                       <DialogTitle style={{ color: textColor }}>New habit</DialogTitle>
                     </DialogHeader>
@@ -640,10 +842,7 @@ export default function HabitCalendarSite() {
                         <div className="mb-2 text-xs uppercase tracking-wide" style={{ color: mutedColor }}>
                           Preview
                         </div>
-                        <div
-                          className="h-10 rounded-2xl border"
-                          style={{ background: habitPreviewColor, borderColor }}
-                        />
+                        <div className="h-10 rounded-2xl border" style={{ background: habitPreviewColor, borderColor }} />
                       </div>
                     </div>
 
@@ -677,7 +876,9 @@ export default function HabitCalendarSite() {
                     <button
                       key={habit.id}
                       type="button"
-                      onClick={() => updateActiveWorkspace((workspace) => ({ ...workspace, selectedHabitId: habit.id }))}
+                      onClick={() =>
+                        updateActiveWorkspace((workspace) => ({ ...workspace, selectedHabitId: habit.id }))
+                      }
                       className="group flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-all hover:-translate-y-px"
                       style={{
                         borderColor: active ? textColor : borderColor,
@@ -717,18 +918,11 @@ export default function HabitCalendarSite() {
           </CardContent>
         </Card>
 
-        <Card
-          style={{ background: panelBackground, borderColor }}
-          className="rounded-3xl border shadow-sm"
-        >
+        <Card style={{ background: panelBackground, borderColor }} className="rounded-3xl border shadow-sm">
           <CardContent className="p-4 md:p-5">
             <div className="grid grid-cols-7 gap-2">
               {Weekdays.map((weekday) => (
-                <div
-                  key={weekday}
-                  className="pb-1 text-center text-xs font-medium uppercase tracking-[0.16em]"
-                  style={{ color: mutedColor }}
-                >
+                <div key={weekday} className="pb-1 text-center text-xs font-medium uppercase tracking-[0.16em]" style={{ color: mutedColor }}>
                   {weekday}
                 </div>
               ))}
