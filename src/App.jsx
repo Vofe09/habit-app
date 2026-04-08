@@ -64,6 +64,16 @@ const firebaseConfig = {
 };
 
 const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
+const DebugMode = true;
+
+function debugLog(message, data) {
+  if (!DebugMode) return;
+  if (data !== undefined) {
+    console.log(`[HabitCalendar] ${message}`, data);
+  } else {
+    console.log(`[HabitCalendar] ${message}`);
+  }
+}
 
 let firebaseAuth = null;
 let firestoreDb = null;
@@ -234,71 +244,112 @@ export default function HabitCalendarSite() {
     [activeWorkspace.selectedYear, activeWorkspace.selectedMonth]
   );
 
-  useEffect(() => {
-    if (!firebaseAuth || !firestoreDb) {
-      setIsAuthReady(true);
-      setAuthError(
-        "Firebase is not configured yet. Add the VITE_FIREBASE_* env variables first."
-      );
-      return undefined;
-    }
+ useEffect(() => {
+  if (!firebaseAuth || !firestoreDb) {
+    setIsAuthReady(true);
+    setAuthError(
+      "Firebase is not configured yet. Add the VITE_FIREBASE_* env variables first."
+    );
+    debugLog("Firebase config missing", firebaseConfig);
+    return undefined;
+  }
 
-    const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
-      setUser(nextUser);
-      setIsAuthReady(true);
-      setIsRemoteReady(false);
-      setAuthError("");
+  debugLog("Auth listener initialized");
 
-      if (!nextUser) {
-        setIsRemoteReady(true);
-        return;
-      }
-
-      try {
-        const snapshot = await getDoc(doc(firestoreDb, "users", nextUser.uid));
-        if (snapshot.exists()) {
-          const normalized = normalizeAppState(snapshot.data());
-          setIsDark(normalized.isDark);
-          setWorkspaces(normalized.workspaces);
-          setSelectedWorkspaceIndex(normalized.selectedWorkspaceIndex);
-        } else {
-          const fallback = createDefaultAppState();
-          setIsDark(fallback.isDark);
-          setWorkspaces(fallback.workspaces);
-          setSelectedWorkspaceIndex(fallback.selectedWorkspaceIndex);
-        }
-      } catch (error) {
-        setAuthError(error?.message || "Failed to load your Firebase data.");
-      } finally {
-        setIsRemoteReady(true);
-      }
+  const unsubscribe = onAuthStateChanged(firebaseAuth, async (nextUser) => {
+    debugLog("Auth state changed", {
+      hasUser: Boolean(nextUser),
+      uid: nextUser?.uid ?? null,
+      email: nextUser?.email ?? null,
     });
 
-    return () => unsubscribe();
-  }, []);
+    setUser(nextUser);
+    setIsAuthReady(true);
+    setIsRemoteReady(false);
+    setAuthError("");
 
-  useEffect(() => {
-    if (!user || !firestoreDb || !isRemoteReady) return undefined;
+    if (!nextUser) {
+      debugLog("No user signed in");
+      setIsRemoteReady(true);
+      return;
+    }
 
-    const timeoutId = window.setTimeout(async () => {
-      setIsSaving(true);
-      try {
-        await setDoc(doc(firestoreDb, "users", user.uid), {
-          isDark,
-          workspaces,
-          selectedWorkspaceIndex,
-          updatedAt: serverTimestamp(),
-        });
-      } catch (error) {
-        setAuthError(error?.message || "Failed to save your data.");
-      } finally {
-        setIsSaving(false);
+    try {
+      const userDocRef = doc(firestoreDb, "users", nextUser.uid);
+      debugLog("Loading Firestore document", { path: `users/${nextUser.uid}` });
+
+      const snapshot = await getDoc(userDocRef);
+
+      debugLog("Firestore snapshot received", {
+        exists: snapshot.exists(),
+        data: snapshot.exists() ? snapshot.data() : null,
+      });
+
+      if (snapshot.exists()) {
+        const normalized = normalizeAppState(snapshot.data());
+        setIsDark(normalized.isDark);
+        setWorkspaces(normalized.workspaces);
+        setSelectedWorkspaceIndex(normalized.selectedWorkspaceIndex);
+      } else {
+        const fallback = createDefaultAppState();
+        debugLog("No document found, using fallback state", fallback);
+        setIsDark(fallback.isDark);
+        setWorkspaces(fallback.workspaces);
+        setSelectedWorkspaceIndex(fallback.selectedWorkspaceIndex);
       }
-    }, 500);
+    } catch (error) {
+      console.error("[HabitCalendar] Failed to load Firebase data:", error);
+      setAuthError(error?.message || "Failed to load your Firebase data.");
+    } finally {
+      setIsRemoteReady(true);
+      debugLog("Remote state ready");
+    }
+  });
 
-    return () => window.clearTimeout(timeoutId);
-  }, [user, firestoreDb, isRemoteReady, isDark, workspaces, selectedWorkspaceIndex]);
+  return () => unsubscribe();
+}, []);
 
+useEffect(() => {
+  debugLog("Save effect check", {
+    hasUser: Boolean(user),
+    isRemoteReady,
+    userId: user?.uid ?? null,
+    isDark,
+    selectedWorkspaceIndex,
+    workspaceCount: workspaces.length,
+  });
+
+  if (!user || !firestoreDb || !isRemoteReady) return undefined;
+
+  const timeoutId = window.setTimeout(async () => {
+    setIsSaving(true);
+
+    const payload = {
+      isDark,
+      workspaces,
+      selectedWorkspaceIndex,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      debugLog("Saving to Firestore", {
+        path: `users/${user.uid}`,
+        payload,
+      });
+
+      await setDoc(doc(firestoreDb, "users", user.uid), payload);
+
+      debugLog("Save successful");
+    } catch (error) {
+      console.error("[HabitCalendar] Failed to save Firebase data:", error);
+      setAuthError(error?.message || "Failed to save your data.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, 500);
+
+  return () => window.clearTimeout(timeoutId);
+}, [user, firestoreDb, isRemoteReady, isDark, workspaces, selectedWorkspaceIndex]);
   const habitMap = useMemo(() => {
     const map = new Map();
     activeWorkspace.habits.forEach((habit) => map.set(habit.id, habit));
@@ -718,6 +769,10 @@ export default function HabitCalendarSite() {
               <span>Workspace {selectedWorkspaceIndex + 1} of {workspaces.length}.</span>
               <span>Use arrows to switch workspaces.</span>
               <span>{isSaving ? "Saving to Firebase..." : "Synced with Firebase."}</span>
+              <span>User: {user?.uid ?? "none"}</span>
+              <span>Auth: {isAuthReady ? "ready" : "loading"}</span>
+              <span>Remote: {isRemoteReady ? "ready" : "loading"}</span>
+            
             </div>
             {authError ? (
               <div className="rounded-2xl border px-3 py-2 text-xs" style={{ borderColor, color: textColor, background: surfaceColor }}>
