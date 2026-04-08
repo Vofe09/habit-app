@@ -65,7 +65,7 @@ const firebaseConfig = {
 
 const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
 const DebugMode = true;
-const [colorMode, setColorMode] = useState("preset"); // "preset" | "custom"
+
 
 function debugLog(message, data) {
   if (!DebugMode) return;
@@ -237,6 +237,7 @@ export default function HabitCalendarSite() {
   const [isRemoteReady, setIsRemoteReady] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [colorMode, setColorMode] = useState("preset"); // "preset" | "custom"
 
   const activeWorkspace = workspaces[selectedWorkspaceIndex] ?? workspaces[0];
 
