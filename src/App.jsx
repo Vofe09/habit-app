@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Plus, Moon, Sun, ChevronLeft, ChevronRight, Trash2, Palette } from "lucide-react";
+import { Plus, Moon, Sun, ChevronLeft, ChevronRight, Trash2, Palette, LayoutGrid } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-const StorageKey = "MinimalHabitCalendar_v1";
+const StorageKey = "MinimalHabitCalendar_v2";
 
 const PresetColors = [
   { name: "Rose", value: "#D8A7B1" },
@@ -116,16 +116,49 @@ function isHexColor(value) {
   return typeof value === "string" && value.startsWith("#");
 }
 
+function createEmptyWorkspace(name) {
+  return {
+    id: crypto.randomUUID(),
+    name,
+    habits: [],
+    days: {},
+    selectedHabitId: null,
+    selectedYear: new Date().getFullYear(),
+    selectedMonth: new Date().getMonth(),
+  };
+}
+
+function normalizeWorkspace(workspace, fallbackName) {
+  if (!workspace || typeof workspace !== "object") {
+    return createEmptyWorkspace(fallbackName);
+  }
+
+  return {
+    id: typeof workspace.id === "string" ? workspace.id : crypto.randomUUID(),
+    name: typeof workspace.name === "string" && workspace.name.trim() ? workspace.name : fallbackName,
+    habits: Array.isArray(workspace.habits) ? workspace.habits : [],
+    days: typeof workspace.days === "object" && workspace.days !== null ? workspace.days : {},
+    selectedHabitId: workspace.selectedHabitId ?? null,
+    selectedYear: Number.isInteger(workspace.selectedYear) ? workspace.selectedYear : new Date().getFullYear(),
+    selectedMonth: Number.isInteger(workspace.selectedMonth) ? workspace.selectedMonth : new Date().getMonth(),
+  };
+}
+
 export default function HabitCalendarSite() {
   const saved = loadState();
   const now = new Date();
 
+  const initialWorkspaces = Array.isArray(saved?.workspaces) && saved.workspaces.length > 0
+    ? saved.workspaces.map((workspace, index) => normalizeWorkspace(workspace, `Workspace ${index + 1}`))
+    : [createEmptyWorkspace("Main workspace")];
+
   const [isDark, setIsDark] = useState(saved?.isDark ?? false);
-  const [selectedYear, setSelectedYear] = useState(saved?.selectedYear ?? now.getFullYear());
-  const [selectedMonth, setSelectedMonth] = useState(saved?.selectedMonth ?? now.getMonth());
-  const [habits, setHabits] = useState(Array.isArray(saved?.habits) ? saved.habits : []);
-  const [days, setDays] = useState(typeof saved?.days === "object" && saved?.days !== null ? saved.days : {});
-  const [selectedHabitId, setSelectedHabitId] = useState(saved?.selectedHabitId ?? null);
+  const [workspaces, setWorkspaces] = useState(initialWorkspaces);
+  const [selectedWorkspaceIndex, setSelectedWorkspaceIndex] = useState(
+    clamp(saved?.selectedWorkspaceIndex ?? 0, 0, initialWorkspaces.length - 1)
+  );
+  const [isWorkspaceDialogOpen, setIsWorkspaceDialogOpen] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isHabitDialogOpen, setIsHabitDialogOpen] = useState(false);
   const [habitName, setHabitName] = useState("");
   const [habitColor, setHabitColor] = useState(PresetColors[0].value);
@@ -133,29 +166,29 @@ export default function HabitCalendarSite() {
   const [customGreen, setCustomGreen] = useState("167");
   const [customBlue, setCustomBlue] = useState("177");
 
+  const activeWorkspace = workspaces[selectedWorkspaceIndex] ?? workspaces[0];
+
   const monthCells = useMemo(
-    () => buildMonthCells(selectedYear, selectedMonth),
-    [selectedYear, selectedMonth]
+    () => buildMonthCells(activeWorkspace.selectedYear, activeWorkspace.selectedMonth),
+    [activeWorkspace.selectedYear, activeWorkspace.selectedMonth]
   );
 
   useEffect(() => {
     saveState({
       isDark,
-      selectedYear,
-      selectedMonth,
-      habits,
-      days,
-      selectedHabitId,
+      workspaces,
+      selectedWorkspaceIndex,
     });
-  }, [isDark, selectedYear, selectedMonth, habits, days, selectedHabitId]);
+  }, [isDark, workspaces, selectedWorkspaceIndex]);
 
   const habitMap = useMemo(() => {
     const map = new Map();
-    habits.forEach((habit) => map.set(habit.id, habit));
+    activeWorkspace.habits.forEach((habit) => map.set(habit.id, habit));
     return map;
-  }, [habits]);
+  }, [activeWorkspace.habits]);
 
-  const monthLabel = `${MonthNames[selectedMonth]} ${selectedYear}`;
+  const monthLabel = `${MonthNames[activeWorkspace.selectedMonth]} ${activeWorkspace.selectedYear}`;
+  const workspaceLabel = activeWorkspace.name;
   const appBackground = isDark ? "#111111" : "#EEE7DF";
   const panelBackground = themeSurfaceSoft(isDark);
   const textColor = themeText(isDark);
@@ -163,17 +196,24 @@ export default function HabitCalendarSite() {
   const borderColor = themeBorder(isDark);
   const surfaceColor = themeSurface(isDark);
 
+  function updateActiveWorkspace(updater) {
+    setWorkspaces((currentWorkspaces) =>
+      currentWorkspaces.map((workspace, index) => {
+        if (index !== selectedWorkspaceIndex) return workspace;
+        const updatedWorkspace = updater(workspace);
+        return normalizeWorkspace(updatedWorkspace, workspace.name);
+      })
+    );
+  }
+
   function addHabit() {
     const cleanName = habitName.trim();
     if (!cleanName) return;
 
-    const red = clamp(Number(habitColor.startsWith("#") ? 216 : customRed || 0), 0, 255);
+    const red = clamp(Number(customRed || 0), 0, 255);
     const green = clamp(Number(customGreen || 0), 0, 255);
     const blue = clamp(Number(customBlue || 0), 0, 255);
-
-    const color = isHexColor(habitColor)
-      ? habitColor
-      : `rgb(${red}, ${green}, ${blue})`;
+    const color = isHexColor(habitColor) ? habitColor : `rgb(${red}, ${green}, ${blue})`;
 
     const newHabit = {
       id: crypto.randomUUID(),
@@ -181,8 +221,12 @@ export default function HabitCalendarSite() {
       color,
     };
 
-    setHabits((current) => [...current, newHabit]);
-    setSelectedHabitId(newHabit.id);
+    updateActiveWorkspace((workspace) => ({
+      ...workspace,
+      habits: [...workspace.habits, newHabit],
+      selectedHabitId: newHabit.id,
+    }));
+
     setHabitName("");
     setHabitColor(PresetColors[0].value);
     setCustomRed("216");
@@ -192,10 +236,10 @@ export default function HabitCalendarSite() {
   }
 
   function deleteHabit(habitId) {
-    setHabits((currentHabits) => currentHabits.filter((habit) => habit.id !== habitId));
-    setDays((currentDays) => {
+    updateActiveWorkspace((workspace) => {
+      const nextHabits = workspace.habits.filter((habit) => habit.id !== habitId);
       const nextDays = Object.fromEntries(
-        Object.entries(currentDays).map(([date, habitIds]) => [
+        Object.entries(workspace.days).map(([date, habitIds]) => [
           date,
           habitIds.filter((id) => id !== habitId),
         ])
@@ -207,29 +251,46 @@ export default function HabitCalendarSite() {
         }
       });
 
-      return nextDays;
+      return {
+        ...workspace,
+        habits: nextHabits,
+        days: nextDays,
+        selectedHabitId: workspace.selectedHabitId === habitId ? null : workspace.selectedHabitId,
+      };
     });
-
-    setSelectedHabitId((currentSelected) => (currentSelected === habitId ? null : currentSelected));
   }
 
   function goPreviousMonth() {
-    setSelectedMonth((currentMonth) => {
-      if (currentMonth === 0) {
-        setSelectedYear((year) => year - 1);
-        return 11;
+    updateActiveWorkspace((workspace) => {
+      if (workspace.selectedMonth === 0) {
+        return {
+          ...workspace,
+          selectedYear: workspace.selectedYear - 1,
+          selectedMonth: 11,
+        };
       }
-      return currentMonth - 1;
+
+      return {
+        ...workspace,
+        selectedMonth: workspace.selectedMonth - 1,
+      };
     });
   }
 
   function goNextMonth() {
-    setSelectedMonth((currentMonth) => {
-      if (currentMonth === 11) {
-        setSelectedYear((year) => year + 1);
-        return 0;
+    updateActiveWorkspace((workspace) => {
+      if (workspace.selectedMonth === 11) {
+        return {
+          ...workspace,
+          selectedYear: workspace.selectedYear + 1,
+          selectedMonth: 0,
+        };
       }
-      return currentMonth + 1;
+
+      return {
+        ...workspace,
+        selectedMonth: workspace.selectedMonth + 1,
+      };
     });
   }
 
@@ -238,8 +299,8 @@ export default function HabitCalendarSite() {
     const habit = habitMap.get(habitId);
     if (!habit) return;
 
-    setDays((currentDays) => {
-      const current = currentDays[date] ?? [];
+    updateActiveWorkspace((workspace) => {
+      const current = workspace.days[date] ?? [];
       let next = [...current];
       const exists = next.includes(habitId);
 
@@ -251,27 +312,33 @@ export default function HabitCalendarSite() {
         next = [...next, habitId];
       }
 
-      const nextDays = { ...currentDays };
+      const nextDays = { ...workspace.days };
       if (next.length === 0) {
         delete nextDays[date];
       } else {
         nextDays[date] = next;
       }
 
-      return nextDays;
+      return {
+        ...workspace,
+        days: nextDays,
+      };
     });
   }
 
   function clearDay(date) {
-    setDays((currentDays) => {
-      const nextDays = { ...currentDays };
+    updateActiveWorkspace((workspace) => {
+      const nextDays = { ...workspace.days };
       delete nextDays[date];
-      return nextDays;
+      return {
+        ...workspace,
+        days: nextDays,
+      };
     });
   }
 
   function renderCellStyle(date) {
-    const habitIds = days[date] ?? [];
+    const habitIds = activeWorkspace.days[date] ?? [];
     const border = themeBorder(isDark);
 
     if (habitIds.length === 0) {
@@ -303,6 +370,25 @@ export default function HabitCalendarSite() {
     };
   }
 
+  function createWorkspace() {
+    const cleanName = newWorkspaceName.trim();
+    const nextName = cleanName || `Workspace ${workspaces.length + 1}`;
+    const nextWorkspace = createEmptyWorkspace(nextName);
+
+    setWorkspaces((current) => [...current, nextWorkspace]);
+    setSelectedWorkspaceIndex(workspaces.length);
+    setNewWorkspaceName("");
+    setIsWorkspaceDialogOpen(false);
+  }
+
+  function goPreviousWorkspace() {
+    setSelectedWorkspaceIndex((current) => (current === 0 ? workspaces.length - 1 : current - 1));
+  }
+
+  function goNextWorkspace() {
+    setSelectedWorkspaceIndex((current) => (current === workspaces.length - 1 ? 0 : current + 1));
+  }
+
   const habitPreviewColor = isHexColor(habitColor)
     ? habitColor
     : `rgb(${clamp(Number(customRed || 0), 0, 255)}, ${clamp(Number(customGreen || 0), 0, 255)}, ${clamp(Number(customBlue || 0), 0, 255)})`;
@@ -329,7 +415,7 @@ export default function HabitCalendarSite() {
                 <div>
                   <h1 className="text-xl font-semibold md:text-2xl">Minimal habit calendar</h1>
                   <p className="text-sm" style={{ color: mutedColor }}>
-                    Calendar-first layout, persistent habits, reduced visual noise.
+                    Workspace-based calendars with persistent habits and low-noise visuals.
                   </p>
                 </div>
               </div>
@@ -337,26 +423,79 @@ export default function HabitCalendarSite() {
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
-                  onClick={goPreviousMonth}
+                  onClick={goPreviousWorkspace}
                   className="rounded-2xl border"
                   style={{ borderColor, background: panelBackground, color: textColor }}
+                  title="Previous workspace"
                 >
                   <ChevronLeft size={16} />
                 </Button>
+
                 <div
-                  className="min-w-[160px] rounded-2xl border px-4 py-2 text-center text-sm font-medium"
+                  className="min-w-[180px] rounded-2xl border px-4 py-2 text-center text-sm font-medium"
                   style={{ borderColor, background: surfaceColor }}
                 >
-                  {monthLabel}
+                  <div className="flex items-center justify-center gap-2">
+                    <LayoutGrid size={14} />
+                    <span>{workspaceLabel}</span>
+                  </div>
                 </div>
+
                 <Button
                   variant="outline"
-                  onClick={goNextMonth}
+                  onClick={goNextWorkspace}
                   className="rounded-2xl border"
                   style={{ borderColor, background: panelBackground, color: textColor }}
+                  title="Next workspace"
                 >
                   <ChevronRight size={16} />
                 </Button>
+
+                <Dialog open={isWorkspaceDialogOpen} onOpenChange={setIsWorkspaceDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="rounded-2xl border" style={{ borderColor, background: panelBackground, color: textColor }}>
+                      <Plus size={16} />
+                      New workspace
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent
+                    className="rounded-3xl border shadow-2xl sm:max-w-md"
+                    style={{ background: panelBackground, color: textColor, borderColor }}
+                  >
+                    <DialogHeader>
+                      <DialogTitle style={{ color: textColor }}>Create new workspace</DialogTitle>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-2">
+                      <div className="grid gap-2">
+                        <Label htmlFor="workspaceName" style={{ color: mutedColor }}>
+                          Workspace name
+                        </Label>
+                        <Input
+                          id="workspaceName"
+                          value={newWorkspaceName}
+                          onChange={(event) => setNewWorkspaceName(event.target.value)}
+                          placeholder="Mood tracker"
+                          className="rounded-2xl border"
+                          style={{ background: surfaceColor, color: textColor, borderColor }}
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        variant="outline"
+                        onClick={() => setIsWorkspaceDialogOpen(false)}
+                        className="rounded-2xl border"
+                        style={{ borderColor, background: panelBackground, color: textColor }}
+                      >
+                        Cancel
+                      </Button>
+                      <Button onClick={createWorkspace} className="rounded-2xl shadow-sm">
+                        Create workspace
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+
                 <Button
                   variant="outline"
                   onClick={() => setIsDark((value) => !value)}
@@ -365,7 +504,43 @@ export default function HabitCalendarSite() {
                 >
                   {isDark ? <Sun size={16} /> : <Moon size={16} />}
                 </Button>
+              </div>
+            </div>
 
+            <div className="flex items-center gap-2 text-xs" style={{ color: mutedColor }}>
+              <span>Workspace {selectedWorkspaceIndex + 1} of {workspaces.length}.</span>
+              <span>Use arrows to switch workspaces.</span>
+              <span>Each workspace keeps its own month, habits, and days.</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card
+          style={{ background: panelBackground, borderColor }}
+          className="rounded-3xl border shadow-sm"
+        >
+          <CardContent className="flex flex-col gap-4 p-4 md:p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium" style={{ color: textColor }}>
+                <span>{monthLabel}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={goPreviousMonth}
+                  className="rounded-2xl border"
+                  style={{ borderColor, background: panelBackground, color: textColor }}
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={goNextMonth}
+                  className="rounded-2xl border"
+                  style={{ borderColor, background: panelBackground, color: textColor }}
+                >
+                  <ChevronRight size={16} />
+                </Button>
                 <Dialog open={isHabitDialogOpen} onOpenChange={setIsHabitDialogOpen}>
                   <DialogTrigger asChild>
                     <Button className="rounded-2xl shadow-sm">
@@ -397,11 +572,7 @@ export default function HabitCalendarSite() {
                           onChange={(event) => setHabitName(event.target.value)}
                           placeholder="German"
                           className="rounded-2xl border"
-                          style={{
-                            background: surfaceColor,
-                            color: textColor,
-                            borderColor,
-                          }}
+                          style={{ background: surfaceColor, color: textColor, borderColor }}
                         />
                       </div>
 
@@ -419,11 +590,7 @@ export default function HabitCalendarSite() {
                                 style={{
                                   background: preset.value,
                                   borderColor: active ? textColor : borderColor,
-                                  boxShadow: active
-                                    ? isDark
-                                      ? `0 0 0 2px ${textColor} inset`
-                                      : `0 0 0 2px ${textColor} inset`
-                                    : "none",
+                                  boxShadow: active ? `0 0 0 2px ${textColor} inset` : "none",
                                 }}
                                 title={preset.name}
                                 aria-label={preset.name}
@@ -475,10 +642,7 @@ export default function HabitCalendarSite() {
                         </div>
                         <div
                           className="h-10 rounded-2xl border"
-                          style={{
-                            background: habitPreviewColor,
-                            borderColor,
-                          }}
+                          style={{ background: habitPreviewColor, borderColor }}
                         />
                       </div>
                     </div>
@@ -502,18 +666,18 @@ export default function HabitCalendarSite() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {habits.length === 0 ? (
+              {activeWorkspace.habits.length === 0 ? (
                 <div className="rounded-2xl border px-3 py-2 text-sm" style={{ borderColor, color: mutedColor }}>
                   Add a habit first, then assign it to calendar days.
                 </div>
               ) : (
-                habits.map((habit) => {
-                  const active = selectedHabitId === habit.id;
+                activeWorkspace.habits.map((habit) => {
+                  const active = activeWorkspace.selectedHabitId === habit.id;
                   return (
                     <button
                       key={habit.id}
                       type="button"
-                      onClick={() => setSelectedHabitId(habit.id)}
+                      onClick={() => updateActiveWorkspace((workspace) => ({ ...workspace, selectedHabitId: habit.id }))}
                       className="group flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm transition-all hover:-translate-y-px"
                       style={{
                         borderColor: active ? textColor : borderColor,
@@ -574,7 +738,7 @@ export default function HabitCalendarSite() {
                   return <div key={`empty-${index}`} className="aspect-square" />;
                 }
 
-                const habitIds = days[cell.date] ?? [];
+                const habitIds = activeWorkspace.days[cell.date] ?? [];
                 const cellStyle = renderCellStyle(cell.date);
                 const isFilled = habitIds.length > 0;
 
@@ -583,7 +747,7 @@ export default function HabitCalendarSite() {
                     key={cell.date}
                     whileTap={{ scale: 0.98 }}
                     type="button"
-                    onClick={() => setDayHabit(cell.date, selectedHabitId)}
+                    onClick={() => setDayHabit(cell.date, activeWorkspace.selectedHabitId)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       clearDay(cell.date);
@@ -591,10 +755,7 @@ export default function HabitCalendarSite() {
                     className="relative aspect-square overflow-hidden rounded-2xl border text-left transition hover:brightness-[0.99]"
                     title={
                       isFilled
-                        ? habitIds
-                            .map((id) => habitMap.get(id)?.name)
-                            .filter(Boolean)
-                            .join(", ")
+                        ? habitIds.map((id) => habitMap.get(id)?.name).filter(Boolean).join(", ")
                         : "Empty day"
                     }
                     style={{
@@ -612,10 +773,6 @@ export default function HabitCalendarSite() {
                     >
                       {cell.day}
                     </div>
-
-                    {habitIds.length === 0 && (
-                      <div className="absolute inset-0 flex items-center justify-center text-xs" style={{ color: mutedColor }} />
-                    )}
                   </motion.button>
                 );
               })}
