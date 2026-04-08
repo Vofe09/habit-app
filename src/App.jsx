@@ -65,6 +65,7 @@ const firebaseConfig = {
 
 const hasFirebaseConfig = Object.values(firebaseConfig).every(Boolean);
 const DebugMode = true;
+const [colorMode, setColorMode] = useState("preset"); // "preset" | "custom"
 
 function debugLog(message, data) {
   if (!DebugMode) return;
@@ -402,7 +403,11 @@ useEffect(() => {
     const red = clamp(Number(customRed || 0), 0, 255);
     const green = clamp(Number(customGreen || 0), 0, 255);
     const blue = clamp(Number(customBlue || 0), 0, 255);
-    const color = isHexColor(habitColor) ? habitColor : `rgb(${red}, ${green}, ${blue})`;
+
+    const color =
+      colorMode === "custom"
+        ? `rgb(${red}, ${green}, ${blue})`
+        : habitColor;
 
     const newHabit = {
       id: crypto.randomUUID(),
@@ -418,6 +423,7 @@ useEffect(() => {
 
     setHabitName("");
     setHabitColor(PresetColors[0].value);
+    setColorMode("preset");
     setCustomRed("216");
     setCustomGreen("167");
     setCustomBlue("177");
@@ -842,7 +848,10 @@ useEffect(() => {
                               <button
                                 key={preset.value}
                                 type="button"
-                                onClick={() => setHabitColor(preset.value)}
+                                onClick={() => {
+                                  setHabitColor(preset.value);
+                                  setColorMode("preset");
+                                }}
                                 className="h-10 rounded-2xl border transition-transform hover:scale-[1.03]"
                                 style={{
                                   background: preset.value,
@@ -865,7 +874,10 @@ useEffect(() => {
                             min="0"
                             max="255"
                             value={customRed}
-                            onChange={(event) => setCustomRed(event.target.value)}
+                            onChange={(event) => {
+                              setCustomRed(event.target.value);
+                              setColorMode("custom");
+                            }}
                             placeholder="R"
                             className="rounded-2xl border"
                             style={{ background: surfaceColor, color: textColor, borderColor }}
@@ -875,7 +887,10 @@ useEffect(() => {
                             min="0"
                             max="255"
                             value={customGreen}
-                            onChange={(event) => setCustomGreen(event.target.value)}
+                            onChange={(event) => {
+                              setCustomGreen(event.target.value);
+                              setColorMode("custom");
+                            }}
                             placeholder="G"
                             className="rounded-2xl border"
                             style={{ background: surfaceColor, color: textColor, borderColor }}
@@ -885,7 +900,10 @@ useEffect(() => {
                             min="0"
                             max="255"
                             value={customBlue}
-                            onChange={(event) => setCustomBlue(event.target.value)}
+                            onChange={(event) => {
+                              setCustomBlue(event.target.value);
+                              setColorMode("custom");
+                            }}
                             placeholder="B"
                             className="rounded-2xl border"
                             style={{ background: surfaceColor, color: textColor, borderColor }}
